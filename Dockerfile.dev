@@ -1,0 +1,4 @@
+FROM inkbox/rust:1.93.0
+WORKDIR /crate-zepub-mini
+COPY . /crate-zepub-mini
+RUN apt install -y bsdmainutils unzip 

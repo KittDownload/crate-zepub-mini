@@ -1,0 +1,133 @@
+name: release
+on:
+  workflow_dispatch:
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      rust: ${{ steps.v.outputs.rust }}
+    steps:
+      - name: Rust Version
+        id: v
+        run: |
+          # 最近6个rust版本
+          version=$(curl -sL  https://api.github.com/repos/rust-lang/rust/tags | jq -c --raw-output 'map(select(.name | startswith("release") | not)) | sort_by(.name) | reverse | .[:6] | [.[].name]')
+          echo "$version"
+          echo "rust=$version" >> $GITHUB_OUTPUT
+  check:
+    runs-on: ubuntu-24.04
+    needs: [version]
+    outputs:
+      NEXT_VERSION: ${{ steps.v.outputs.NEXT_VERSION }}
+      PREV_VERSION: ${{ steps.v.outputs.PREV_VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Get Version
+        id: v
+        run: |
+          echo NEXT_VERSION=$(sed -nE 's/^\s*version = "(.*?)"/\1/p' Cargo.toml) >> $GITHUB_OUTPUT
+          echo PREV_VERSION=$(cargo search zepub --limit 1 | sed -nE 's/^[^"]*"//; s/".*//1p' -) >> $GITHUB_OUTPUT
+      - name: Debug Versions
+        run: |
+          echo "Local Version (Next): ${{ steps.v.outputs.NEXT_VERSION }}"
+          echo "Remote Version (Prev): ${{ steps.v.outputs.PREV_VERSION }}"
+  release:
+    runs-on: ubuntu-24.04
+    needs: [check]
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+         fetch-depth: 0
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Get Now Release Version
+        id: v
+        run: |
+          echo NOW_RELEASE=$(git --no-pager tag | grep ${{ needs.check.outputs.NEXT_VERSION }} | sed 's@v@@') >> $GITHUB_OUTPUT
+          RUST_VERSION=$(curl -sL  https://api.github.com/repos/rust-lang/rust/tags | jq -c --raw-output 'map(select(.name | startswith("release") | not)) | sort_by(.name) | reverse | .[0].name ')
+          echo RUST_VERSION="x86_64-musl-stable-$RUST_VERSION" >> $GITHUB_OUTPUT
+      - name: Docker Build
+        uses: docker/build-push-action@v5
+        id: docker_id
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          push: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          build-args: |
+            TAG=${{ steps.v.outputs.RUST_VERSION }}
+      - name: Extract Docker Image
+        id: ex
+        run: |
+          sed -ex
+          docker images
+          image_id="${{ steps.docker_id.outputs.imageid }}"
+          image_id=${image_id:7}
+          mkdir out
+          cd out
+          docker save -o out.tar $image_id
+          tar xvf out.tar
+          cat manifest.json
+          tar xvf $(jq --raw-output '.[0].Layers[0]' manifest.json)
+      - name: Release
+        if: needs.check.outputs.NEXT_VERSION != steps.v.outputs.NOW_RELEASE
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILES=$(git --no-pager show --pretty="" --name-only HEAD)
+          echo $FILES
+          git --no-pager show --pretty="" --name-only HEAD | grep CHANGELOG.md || (echo "::error ::NO CHANGELOG UPDATE,FAIL TO RELEASE" && exit 101)
+          gh release create -F CHANGELOG.md --target master v${{ needs.check.outputs.NEXT_VERSION }} ./out/zepub-tool
+  publish:
+    runs-on: ubuntu-24.04
+    needs: [check,release]
+    if: needs.check.outputs.NEXT_VERSION != needs.check.outputs.PREV_VERSION
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      # 必须 每个crates依次 package后publish，因为后续的package的时候要求前面的必须在crates.io，所以不能一次性把所有crate都packages后再publish
+      matrix:
+        package:
+          - crate: zepub-derive
+            path: derive
+            args: -vv
+          - crate: zepub
+            path: lib
+            args: --no-verify -vv
+    steps:
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cargo login
+        run: cargo login ${{ secrets.CRATES_TOKEN }}
+      - name: Get Version
+        id: v
+        run: |
+          echo NEXT_VERSION=$(sed -nE 's/^\s*version = "(.*?)"/\1/p' Cargo.toml) >> $GITHUB_OUTPUT
+          echo PREV_VERSION=$(cargo search ${{ matrix.package.crate }} --limit 1 | sed -nE 's/^[^"]*"//; s/".*//1p' -) >> $GITHUB_OUTPUT
+      - name: Cargo package
+        if: steps.v.outputs.NEXT_VERSION != steps.v.outputs.PREV_VERSION
+        working-directory: ${{ matrix.package.path }}
+        run: |
+          echo "Releasing version: ${{ needs.check.outputs.NEXT_VERSION }}"
+          echo "Cargo Packaging..."
+          cargo package ${{ matrix.package.args }}
+
+      - name: Publish ${{ matrix.package.name }}
+        if: steps.v.outputs.NEXT_VERSION != steps.v.outputs.PREV_VERSION
+        working-directory: ${{ matrix.package.path }}
+        run: |
+          echo "Cargo Publishing..."
+          cargo publish ${{ matrix.package.args }}
+          echo "New version $NEXT_VERSION has been published"

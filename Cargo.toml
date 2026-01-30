@@ -1,0 +1,16 @@
+[workspace]
+members = ["derive", "lib"] 
+resolver = "2"
+
+[workspace.package]
+rust-version = "1.93.0"
+version = "0.1.0-alpha.1"
+edition = "2024"
+license = "MIT"
+description = "Minimal crate for writing epubs (in-memory)"
+repository = "https://github.com/WattDownload/crate-zepub-mini"
+readme = "./README.md"
+keywords = ["epub","ebook"]
+
+[patch.crates-io]
+zepub-mini = { path = "lib" }

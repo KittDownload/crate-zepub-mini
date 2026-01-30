@@ -1,0 +1,30 @@
+ARG TAG=x86_64-musl-stable-1.93.0
+FROM blackdex/rust-musl:${TAG}
+RUN cargo new app
+
+WORKDIR /workdir/app
+RUN cargo new derive --lib && cargo new lib --lib && echo "extern crate proc_macro;" > derive/src/lib.rs
+COPY Cargo.toml /workdir/app
+COPY lib/Cargo.toml /workdir/app/lib/Cargo.toml
+COPY derive/Cargo.toml /workdir/app/derive/Cargo.toml
+RUN cargo build --release -vv --target=$(arch)-unknown-linux-musl --all-features
+VOLUME /root/.cargo/git
+VOLUME /root/.cargo/registry
+COPY . /workdir/app
+RUN rm -rf target/$(arch)-unknown-linux-musl/release/deps/zepub-mini-* \
+    && rm -rf target/$(arch)-unknown-linux-musl/release/deps/libzepub-mini* \
+    && rm -rf target/$(arch)-unknown-linux-musl/release/deps/tool-* \
+    && rm -rf target/$(arch)-unknown-linux-musl/release/deps/derive-* \
+    && rm -rf target/$(arch)-unknown-linux-musl/release/deps/libderive* \
+    && rm -rf target/release/deps/libzepub-mini* \
+    && rm -rf target/release/deps/zepub-mini-* \
+    && rm -rf target/release/deps/tool-* \
+    && rm -rf target/release/deps/derive-* \
+    && rm -rf target/release/deps/libderive*
+RUN cargo build --release --target=$(arch)-unknown-linux-musl && cp target/$(arch)-unknown-linux-musl/release/zepub-mini ./zepub-mini-tool && chmod +x ./zepub-mini-tool
+
+
+
+FROM scratch
+COPY --from=0 /workdir/app/zepub-mini-tool /zepub-mini-tool
+CMD ["/zepub-mini-tool"]
