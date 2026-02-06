@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 rust-version = "1.93.0"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 license = "MIT"
 description = "Minimal crate for writing epubs (in-memory)"
